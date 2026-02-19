@@ -16,7 +16,9 @@ A **stateless**, self-hosted, server-side rendered (SSR) dashboard for managing 
 - 👥 **Participant Control** - Kick participants, view tracks, connection stats
 - 📹 **Egress/Recordings** - Start/stop composite egress, view active jobs
 - 📥 **Ingress Monitoring** - Stream analytics and connection quality metrics
+- 🤖 **Agent Management** - Dispatch agents to rooms, view job status and success rates
 - 📞 **SIP Integration** - (Optional) Manage SIP trunks, outbound/inbound calls
+- 🔍 **Homer SIP Monitor** - (Optional) Search and analyse SIP calls captured by Homer/SIPCAPTURE
 - 🔧 **Settings View** - Read-only configuration and server info
 - 🧪 **Sandbox** - Token generator with HMAC verification helper
 
@@ -34,7 +36,9 @@ A **stateless**, self-hosted, server-side rendered (SSR) dashboard for managing 
 - **Room Analytics** - Active rooms, participant distribution, room sizes
 - **Egress Analytics** - Job status, success rates, storage usage, type distribution
 - **Ingress Analytics** - Stream monitoring, connection quality, bitrate analysis
+- **Agent Analytics** - Dispatch counts, job status breakdown, success rates per agent
 - **SIP Analytics** - Trunk status, call volume, dispatch rules (when enabled)
+- **Homer SIP Analytics** - Per-call flow diagrams, SIP message inspection, session metrics (when enabled)
 
 ### Visual Components
 
@@ -185,6 +189,12 @@ ENABLE_SIP=false
 | `HOST`               | ❌       | `0.0.0.0`  | Host to bind to                                                   |
 | `PORT`               | ❌       | `8000`     | Port to listen on                                                 |
 | `ENABLE_SIP`         | ❌       | `false`    | Enable SIP features                                               |
+| `ENABLE_HOMER`       | ❌       | `false`    | Enable Homer SIP Monitor tab                                      |
+| `HOMER_URL`          | ❌*      | -          | Homer server base URL (e.g., `https://homer.example.com`)         |
+| `HOMER_USERNAME`     | ❌*      | -          | Homer login username                                              |
+| `HOMER_PASSWORD`     | ❌*      | -          | Homer login password                                              |
+
+> \* Required when `ENABLE_HOMER=true`
 
 ## 📖 Usage
 
@@ -218,11 +228,32 @@ ENABLE_SIP=false
 - Stop active recordings
 - View file outputs and download URLs
 
+#### Agents (`/agents`)
+
+- Fleet overview — all agent dispatches grouped by agent name
+- Per-agent detail page with job status breakdown and success rate chart
+- Dispatch agents to rooms with optional metadata
+- Delete active dispatches
+- Job-level metrics: running, success, pending, failed counts
+
 #### SIP (`/sip-outbound`, `/sip-inbound`)
 
 - View configured SIP trunks
 - Create outbound SIP calls
 - View inbound dispatch rules
+
+#### Homer SIP Monitor (`/homer`) *(optional)*
+
+Requires `ENABLE_HOMER=true` and Homer/SIPCAPTURE credentials in your `.env`.
+
+- **Search calls** by Call-ID, From/To user, SIP method, source/destination IP, From/To tag, and time range
+- **Call-ID fast lookup** — searches directly via the transaction endpoint, finding calls regardless of age (bypasses Homer's 200-record cap)
+- **Call detail** with five tabs:
+  - **Flow** — ladder diagram with color-coded SIP arrows, port numbers, first SIP line, timestamps, and +offset per message; click any arrow to view the full raw SIP text in a modal
+  - **Messages** — sortable table of all SIP messages; expand any row to see the raw SIP headers and SDP body
+  - **Session Info** — call parties (UAC/UAS), timing metrics (ringing delay, setup time, disconnect delay, session duration), status badge, and method distribution doughnut chart
+  - **Logs** — HEP-LOG entries captured alongside the SIP messages
+  - **Export** — download the complete call transaction as a JSON file
 
 #### Token Generator (`/sandbox`)
 
@@ -268,12 +299,15 @@ livekit-dashboard/
 │   │   ├── overview.py         # Overview/dashboard
 │   │   ├── rooms.py            # Room management
 │   │   ├── egress.py           # Egress/recordings
+│   │   ├── agents.py           # Agent dispatch management
 │   │   ├── sip.py              # SIP telephony
+│   │   ├── homer.py            # Homer SIP Monitor
 │   │   ├── settings.py         # Settings page
 │   │   ├── sandbox.py          # Token generator
 │   │   └── auth.py             # Authentication
 │   ├── services/               # Business logic
-│   │   └── livekit.py          # LiveKit SDK wrapper
+│   │   ├── livekit.py          # LiveKit SDK wrapper
+│   │   └── homer.py            # Homer JWT auth + API client
 │   ├── security/               # Security modules
 │   │   ├── basic_auth.py       # HTTP Basic Auth
 │   │   └── csrf.py             # CSRF protection
@@ -282,7 +316,11 @@ livekit-dashboard/
 │   │   ├── index.html.j2       # Overview page
 │   │   ├── rooms/              # Room templates
 │   │   ├── egress/             # Egress templates
+│   │   ├── agents/             # Agent templates
 │   │   ├── sip/                # SIP templates
+│   │   ├── homer/              # Homer SIP Monitor templates
+│   │   │   ├── index.html.j2   #   Search + results page
+│   │   │   └── call.html.j2    #   Call detail (5 tabs)
 │   │   ├── settings.html.j2    # Settings page
 │   │   └── sandbox.html.j2     # Token generator
 │   └── static/                 # Static assets
@@ -409,8 +447,15 @@ make check
 | `/egress`              | GET    | List egress jobs   | ✅            |
 | `/egress/start`        | POST   | Start egress       | ✅            |
 | `/egress/{id}/stop`    | POST   | Stop egress        | ✅            |
+| `/agents`              | GET    | Agent fleet overview | ✅          |
+| `/agents/{name}`       | GET    | Per-agent detail   | ✅            |
+| `/agents/dispatch`     | POST   | Create dispatch    | ✅            |
+| `/agents/{id}/delete`  | POST   | Delete dispatch    | ✅            |
 | `/sip-outbound`        | GET    | SIP outbound page  | ✅            |
 | `/sip-inbound`         | GET    | SIP inbound page   | ✅            |
+| `/homer`               | GET    | Homer SIP search   | ✅            |
+| `/homer/call/{callid}` | GET    | Homer call detail  | ✅            |
+| `/homer/call/{callid}/export.json` | GET | Export call JSON | ✅      |
 | `/sandbox`             | GET    | Token generator    | ✅            |
 | `/settings`            | GET    | Settings page      | ✅            |
 | `/logout`              | GET    | Logout page        | ❌            |
@@ -476,7 +521,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - ✅ Token generation works on-the-fly
 - ✅ Room and participant management operational
 - ✅ Egress start/stop functionality
+- ✅ Agent dispatch management (fleet overview + per-agent detail)
 - ✅ SIP features (when enabled)
+- ✅ Homer SIP Monitor — call search, flow diagram, message inspection, session metrics, JSON export (when enabled)
 
 ---
 

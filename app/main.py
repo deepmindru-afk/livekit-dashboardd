@@ -5,6 +5,7 @@ Stateless SSR dashboard for LiveKit server management
 
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.routes import overview, rooms, egress, sip, settings, sandbox, auth
+from app.routes import overview, rooms, egress, sip, settings, sandbox, auth, agents, homer
 from app.security.csrf import get_csrf_token
 
 
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     print("🚀 LiveKit Dashboard starting up...")
     print(f"   LiveKit URL: {os.environ.get('LIVEKIT_URL', 'Not set')}")
     print(f"   SIP Enabled: {os.environ.get('ENABLE_SIP', 'false')}")
+    print(f"   Homer Enabled: {os.environ.get('ENABLE_HOMER', 'false')}")
 
     # Verify required environment variables
     required_vars = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
@@ -80,6 +82,18 @@ def csrf_token_function(request: Request) -> str:
 
 
 templates.env.globals["csrf_token"] = csrf_token_function
+templates.env.globals["homer_enabled"] = lambda: os.environ.get("ENABLE_HOMER", "false").lower() == "true"
+
+
+def _datetimeformat(value: int) -> str:
+    """Format a Unix timestamp (seconds) as a human-readable string."""
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(value)
+
+
+templates.env.filters["datetimeformat"] = _datetimeformat
 
 # Store templates in app state for route access
 app.state.templates = templates
@@ -89,12 +103,14 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Include routers
 app.include_router(overview.router, tags=["Overview"])
+app.include_router(agents.router, tags=["Agents"])
 app.include_router(rooms.router, tags=["Rooms"])
 app.include_router(egress.router, tags=["Egress"])
 app.include_router(sip.router, tags=["SIP"])
 app.include_router(settings.router, tags=["Settings"])
 app.include_router(sandbox.router, tags=["Sandbox"])
 app.include_router(auth.router, tags=["Auth"])
+app.include_router(homer.router, tags=["Homer"])
 
 
 # Security headers middleware
